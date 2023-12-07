@@ -20,7 +20,6 @@ int main(int argc, char* argv[]) {
     const char* sharedObjectName = argv[1];
     
     // Get the entry point function name from command line
-    // We'll probably hard code this when it's game time
     const char* entryPointName = argv[2];
 
     // Load the shared object
