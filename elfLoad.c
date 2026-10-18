@@ -1,6 +1,6 @@
 /* 
  * elfLoad.c should be compiled with:
- * "gcc elfLoader elfLoad.c -ldl"
+ * "gcc -o elfLoader elfLoad.c -ldl"
  *
  * Target libraries should be Compiled with:
  * "gcc -shared -o $target.so -fPIC $target.c"
@@ -23,20 +23,27 @@ int main(int argc, char* argv[]) {
     const char* entryPointName = argv[2];
 
     // Load the shared object
+    dlerror(); // clear any stale error state from prior dl* calls
     void* sharedObject = dlopen(sharedObjectName, RTLD_NOW);
     if (!sharedObject) {
         fprintf(stderr, "Error loading %s: %s\n", sharedObjectName, dlerror());
         return 1;
     }
 
-    // Find the entry point we're attempting to call
-    void (*entryPoint)() = (void (*)())dlsym(sharedObject, entryPointName);
-    if (!entryPoint) {
-        fprintf(stderr, "Error finding entry point %s: %s\n", entryPointName, dlerror());
+    // Find the entry point we're attempting to call.
+    // POSIX: a NULL return from dlsym is ambiguous, so clear dlerror()
+    // beforehand and check it afterwards rather than testing the pointer alone.
+    dlerror();
+    void* symbol = dlsym(sharedObject, entryPointName);
+    char* error = dlerror();
+    if (error != NULL || symbol == NULL) {
+        fprintf(stderr, "Error finding entry point %s: %s\n",
+                entryPointName, error ? error : "symbol is NULL");
         // Unload the shared object
         dlclose(sharedObject);
         return 1;
     }
+    void (*entryPoint)() = (void (*)())symbol;
 
     // Call the specified entry point.
     entryPoint();
