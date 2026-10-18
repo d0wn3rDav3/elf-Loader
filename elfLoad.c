@@ -1,56 +1,70 @@
-/* 
- * elfLoad.c should be compiled with:
- * "gcc -o elfLoader elfLoad.c -ldl"
+/*
+ * elfLoad.c - minimal shared-object loader for exercising a library's
+ * entry point without writing a per-library harness.
  *
- * Target libraries should be Compiled with:
- * "gcc -shared -o $target.so -fPIC $target.c"
-*/
+ * Build:   make            (or: cc -o elfLoader elfLoad.c -ldl)
+ * Target:  cc -shared -fPIC -o target.so target.c
+ * Run:     ./elfLoader target.so entry_function
+ *
+ * Entry point contract: void entry(void).
+ */
+
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 #include <dlfcn.h>
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <shared_object_file> <entry_point_function>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <shared_object_file> <entry_point_function>\n",
+                argc > 0 && argv[0] ? argv[0] : "elfLoader");
         return 1;
     }
 
-    // Which .so we're attempting to load from the cmd line.
-    // This can be hard coded outside of testing if appropriate
-    const char* sharedObjectName = argv[1];
-    
-    // Get the entry point function name from command line
-    const char* entryPointName = argv[2];
+    const char *sharedObjectName = argv[1];
+    const char *entryPointName = argv[2];
 
-    // Load the shared object
-    dlerror(); // clear any stale error state from prior dl* calls
-    void* sharedObject = dlopen(sharedObjectName, RTLD_NOW);
+    /* dlopen() treats a name with no '/' as a library-search-path lookup,
+     * not a file in the current directory, so "elfLoader hello.so f" fails
+     * even when hello.so is right here. If it exists in cwd, prefix "./". */
+    char localPath[4096];
+    if (strchr(sharedObjectName, '/') == NULL && access(sharedObjectName, F_OK) == 0) {
+        int n = snprintf(localPath, sizeof localPath, "./%s", sharedObjectName);
+        if (n > 0 && (size_t)n < sizeof localPath)
+            sharedObjectName = localPath;
+    }
+
+    dlerror(); /* clear stale error state */
+    void *sharedObject = dlopen(sharedObjectName, RTLD_NOW);
     if (!sharedObject) {
-        fprintf(stderr, "Error loading %s: %s\n", sharedObjectName, dlerror());
+        const char *error = dlerror();
+        fprintf(stderr, "Error loading %s: %s\n", sharedObjectName,
+                error ? error : "unknown error");
         return 1;
     }
 
-    // Find the entry point we're attempting to call.
-    // POSIX: a NULL return from dlsym is ambiguous, so clear dlerror()
-    // beforehand and check it afterwards rather than testing the pointer alone.
+    /* POSIX: a NULL return from dlsym is ambiguous, so clear dlerror()
+     * beforehand and check it afterwards rather than testing the pointer alone. */
     dlerror();
-    void* symbol = dlsym(sharedObject, entryPointName);
-    char* error = dlerror();
-    if (error != NULL || symbol == NULL) {
+    void (*entryPoint)(void);
+    /* ISO C forbids object-pointer -> function-pointer casts; this is the
+     * POSIX-sanctioned way to assign a dlsym() result. */
+    *(void **)(&entryPoint) = dlsym(sharedObject, entryPointName);
+    const char *error = dlerror();
+    if (error != NULL || entryPoint == NULL) {
         fprintf(stderr, "Error finding entry point %s: %s\n",
                 entryPointName, error ? error : "symbol is NULL");
-        // Unload the shared object
-        dlclose(sharedObject);
         return 1;
     }
-    void (*entryPoint)() = (void (*)())symbol;
 
-    // Call the specified entry point.
     entryPoint();
 
-    // Unload the shared object
-    // For most of our libraries, they'll fork into anoter process
-    dlclose(sharedObject);
-
+    /* Deliberately no dlclose(): the process exits next, so unmapping buys
+     * nothing. If the library left a thread running in its own code,
+     * dlclose() unmaps that code underneath it and the process dies with
+     * SIGSEGV. Forked children are unaffected either way. Destructors still
+     * run at exit. */
     return 0;
 }
